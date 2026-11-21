@@ -39,7 +39,7 @@ float pm rtaHannWindow[RTA_FFT_SIZE];
 #elif RTA_FFT_FFT_MODE == 1
 	float pm fft_input[RTA_FFT_SIZE];
 	complex_float pm fft_output[RTA_FFT_SIZE_HALF];
-	float pm rta_rspectrum[RTA_FFT_SIZE_HALF];
+	static float pm rtaLogBin[RTA_DISPLAY_BANDS];
 	float pm rta_display[64];
 #endif
 
@@ -50,6 +50,12 @@ void rtaInit() {
 
 	#if RTA_FFT_FFT_MODE == 0
 		twidfft(twiddle, RTA_FFT_SIZE);
+	#elif RTA_FFT_FFT_MODE == 1
+		const float k = 0.07f;
+		const float denom = 1.0f / (expf(k * (float)(RTA_DISPLAY_BANDS - 1)) - 1.0f);
+		for (int i = 0; i < RTA_DISPLAY_BANDS; i++) {
+			rtaLogBin[i] = (float)(RTA_FFT_SIZE_HALF - 1) * (expf(k * (float)i) - 1.0f) * denom;
+		}
 	#endif
 }
 
@@ -78,23 +84,16 @@ void rtaProcess(float* __restrict inBuf) {
 			#elif RTA_FFT_SIZE == 64
 				rfft64(&fft_input[0], &fft_output[0]);
 			#endif
-			fft_magnitude(&fft_output[0], &rta_rspectrum[0], RTA_FFT_SIZE, 1);
+			// Reuse the FFT input buffer after the transform.
+			fft_magnitude(&fft_output[0], &fft_input[0], RTA_FFT_SIZE, 1);
 
-			// direct copy of the first 64 bins (low frequency)
-			// this is very rough and not nice
-			//memcpy(&rta_display[0], &rta_rspectrum[0], 64 * sizeof(float));
-
-			// better solution: convert the 512 bins of the spectrum to logarithmic 64 bins to display at the iMX25
+			// Interpolate the spectrum onto the logarithmic display bands.
 			float attack = 0.8f;
 			float release = 0.3f;
-			const float k = 0.07f;
-			const float denom = 1.0f / (expf(k * (float)(RTA_DISPLAY_BANDS - 1)) - 1.0f);
 
 			#pragma loop_count(RTA_DISPLAY_BANDS)
 			for (int i = 0; i < RTA_DISPLAY_BANDS; i++) {
-				// Step 1: logarithmix map-equation
-				// calculate the Bar-index i to the FFT-Bin-Index
-				float logIndex = (float)(RTA_FFT_SIZE_HALF - 1) * (expf(k * (float)i) - 1.0f) * denom;
+				float logIndex = rtaLogBin[i];
 
 				// security check for all arrays
 				int idxLo = (int)logIndex;
@@ -111,7 +110,7 @@ void rtaProcess(float* __restrict inBuf) {
 				float frac = logIndex - (float)idxLo;
 
 				// linear interpolation between two Bins
-				float targetVal = rta_rspectrum[idxLo] + frac * (rta_rspectrum[idxHi] - rta_rspectrum[idxLo]);
+				float targetVal = fft_input[idxLo] + frac * (fft_input[idxHi] - fft_input[idxLo]);
 
 				// Step 2: temporal smoothing of the amplitude (ballistic optimization to smooth the spectrum)
 				if (targetVal > rta_display[i]) {
