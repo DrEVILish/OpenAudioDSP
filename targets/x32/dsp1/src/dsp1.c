@@ -64,10 +64,39 @@ void openx32Init(void)
 		dsp_settings.trim_pu[ch] = 1.0f;
 
 		dsp.lowcutEnable[ch] = false;
+		memset(&dsp.lowcutCoeffs[ch][0], 0, (5 * LOWCUT_SECTIONS) * sizeof(float));
+		dsp.lowcutCoeffs[ch][0] = 1.0f;
+		dsp.lowcutCoeffs[ch][1] = 1.0f;
+		memset(&dsp.lowcutStates[ch][0], 0, (2 * LOWCUT_SECTIONS) * sizeof(float));
+
+		#if USE_HIGHCUT == 1
+		dsp.highcutEnable[ch] = false;
+		memset(&dsp.highcutCoeffs[ch][0], 0, (5 * HIGHCUT_SECTIONS) * sizeof(float));
+		dsp.highcutCoeffs[ch][0] = 1.0f;
+		memset(&dsp.highcutStates[ch][0], 0, (2 * HIGHCUT_SECTIONS) * sizeof(float));
+		#endif
+
 		dsp.dspChannelGate[ch].value_enable = false;
+		dsp.dspChannelGate[ch].value_thresholdSq16 = 0.0f;
+		dsp.dspChannelGate[ch].value_gainmin = 0.001f;
+		dsp.dspChannelGate[ch].value_coeff_attack = 0.005f;
+		dsp.dspChannelGate[ch].value_hold_ticks = 0.0f;
+		dsp.dspChannelGate[ch].value_coeff_release = 0.001f;
+		dsp.dspChannelGate[ch].value_thresholdDb = -80.0f;
+		dsp.dspChannelGate[ch].value_negRangeDb = -60.0f;
+		dsp.dspChannelGate[ch].value_expanderSlope = 0.0f;
 		dsp.gateState[ch].envelope = 1.0f;
+		dsp.gateState[ch].holdTimer = 0;
 
 		dsp.compressorEnable[ch] = false;
+		dsp.dspChannelCompressor[ch].value_thresholdDb = 0.0f;
+		dsp.dspChannelCompressor[ch].value_1_minus_1_by_ratio = 0.0f;
+		dsp.dspChannelCompressor[ch].value_makeup = 1.0f;
+		dsp.dspChannelCompressor[ch].value_coeff_attack = 0.005f;
+		dsp.dspChannelCompressor[ch].value_hold_ticks = 0.0f;
+		dsp.dspChannelCompressor[ch].value_coeff_release = 0.001f;
+		dsp.dspChannelCompressor[ch].value_kneeHalf = 0.0f;
+		dsp.dspChannelCompressor[ch].value_kneeCoeff = 0.0f;
 		dsp.compressorState[ch].envelope = 1.0f;
 		dsp.compressorState[ch].holdTimer = 0;
 	}

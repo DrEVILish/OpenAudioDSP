@@ -250,31 +250,63 @@ void commExecCommand(unsigned short classId, unsigned short channel, unsigned sh
 				}
 			}
 			break;
-		case 'g': // gate
+		case 'g': // gate / expander
 			if (channel >= (MAX_CHAN_FULLFEATURED)) {
 				return;
 			}
 
-			if (valueCount == 5) {
-				dsp.dspChannelGate[channel].value_threshold = floatValues[0];
-				dsp.dspChannelGate[channel].value_gainmin = floatValues[1];
-				dsp.dspChannelGate[channel].value_coeff_attack = floatValues[2];
-				dsp.dspChannelGate[channel].value_hold_ticks = floatValues[3];
+			if (valueCount == 9) {
+				bool prevEnable = dsp.dspChannelGate[channel].value_enable;
+				bool newEnable  = (floatValues[8] != 0.0f);
+				dsp.dspChannelGate[channel].value_thresholdSq16 = floatValues[0];
+				dsp.dspChannelGate[channel].value_gainmin       = floatValues[1];
+				dsp.dspChannelGate[channel].value_coeff_attack  = floatValues[2];
+				dsp.dspChannelGate[channel].value_hold_ticks    = floatValues[3];
 				dsp.dspChannelGate[channel].value_coeff_release = floatValues[4];
+				dsp.dspChannelGate[channel].value_thresholdDb   = floatValues[5];
+				dsp.dspChannelGate[channel].value_negRangeDb    = floatValues[6];
+				dsp.dspChannelGate[channel].value_expanderSlope = floatValues[7];
+				dsp.dspChannelGate[channel].value_enable        = newEnable;
+				if (!prevEnable && newEnable) {
+					dsp.gateState[channel].envelope = 1.0f;
+					dsp.gateState[channel].holdTimer = 0;
+				}
 			}
 			break;
 		case 'e': // Equalizer/Filter
 			switch (index) {
-				case 'l': // LowCut
+				case 'l': // LowCut (2 cascaded biquads = 10 interleaved coeffs + enable)
 					if (channel >= (MAX_CHAN_FULLFEATURED)) {
 						return;
 					}
 
-					if (valueCount == 1) {
-						// copy coefficient
-						dsp.lowcutCoeff[channel] = floatValues[0]; // equation = 1.0f / (1.0f + 2.0f * M_PI * desiredLowCutFrequency * (1.0f/samplerate));
+					if (valueCount == (5 * LOWCUT_SECTIONS) + 1) {
+						bool prevEnable = dsp.lowcutEnable[channel];
+						bool newEnable  = (floatValues[5 * LOWCUT_SECTIONS] != 0.0f);
+						memcpy(&dsp.lowcutCoeffs[channel][0], &floatValues[0], (5 * LOWCUT_SECTIONS) * sizeof(float));
+						dsp.lowcutEnable[channel] = newEnable;
+						if (!prevEnable && newEnable) {
+							memset(&dsp.lowcutStates[channel][0], 0, (2 * LOWCUT_SECTIONS) * sizeof(float));
+						}
 					}
 					break;
+				#if USE_HIGHCUT == 1
+				case 'h': // HighCut (1 biquad = 5 coeffs + enable)
+					if (channel >= (MAX_CHAN_FULLFEATURED)) {
+						return;
+					}
+
+					if (valueCount == (5 * HIGHCUT_SECTIONS) + 1) {
+						bool prevEnable = dsp.highcutEnable[channel];
+						bool newEnable  = (floatValues[5 * HIGHCUT_SECTIONS] != 0.0f);
+						memcpy(&dsp.highcutCoeffs[channel][0], &floatValues[0], (5 * HIGHCUT_SECTIONS) * sizeof(float));
+						dsp.highcutEnable[channel] = newEnable;
+						if (!prevEnable && newEnable) {
+							memset(&dsp.highcutStates[channel][0], 0, (2 * HIGHCUT_SECTIONS) * sizeof(float));
+						}
+					}
+					break;
+				#endif
 				case 'e': // EQ
 					if (channel >= (CHANNELS_WITH_4BD_EQ)) {
 						return;
@@ -288,10 +320,20 @@ void commExecCommand(unsigned short classId, unsigned short channel, unsigned sh
 					break;
 				case 'r': // reset channel-parameters
 					if (channel < MAX_CHAN_FULLFEATURED) {
-						// init single-pole lowcut (50 Hz) and clear its state
-						dsp.lowcutCoeff[channel] = 0.993497573586;
-						dsp.lowcutStatesInput[channel] = 0.0;
-						dsp.lowcutStatesOutput[channel] = 0.0;
+						// reset lowcut biquad sections to passthrough
+						dsp.lowcutEnable[channel] = false;
+						memset(&dsp.lowcutCoeffs[channel][0], 0, (5 * LOWCUT_SECTIONS) * sizeof(float));
+						dsp.lowcutCoeffs[channel][0] = 1.0f;
+						dsp.lowcutCoeffs[channel][1] = 1.0f;
+						memset(&dsp.lowcutStates[channel][0], 0, (2 * LOWCUT_SECTIONS) * sizeof(float));
+
+						#if USE_HIGHCUT == 1
+						// reset highcut biquad section to passthrough
+						dsp.highcutEnable[channel] = false;
+						memset(&dsp.highcutCoeffs[channel][0], 0, (5 * HIGHCUT_SECTIONS) * sizeof(float));
+						dsp.highcutCoeffs[channel][0] = 1.0f;
+						memset(&dsp.highcutStates[channel][0], 0, (2 * HIGHCUT_SECTIONS) * sizeof(float));
+						#endif
 					}
 					if (channel >= CHANNELS_WITH_4BD_EQ) {
 						return;
@@ -306,16 +348,6 @@ void commExecCommand(unsigned short classId, unsigned short channel, unsigned sh
 					// reset biquad-integrators
 					memset(&dsp.peqStates_4BD_EQ[channel][0], 0, 2 * EQ_4BD_BANDS * sizeof(float));
 
-					/*
-					// reset the channel-configuration to have a working channel
-					dsp.channelVolume[channel] = 1.0f;
-					dsp.channelSendMainLeftVolume[channel] = 1.0f;
-					dsp.channelSendMainRightVolume[channel] = 1.0f;
-					dsp.channelSendMainSubVolume[channel] = 1.0f;
-					dsp.outputTapPoint[channel] = TAP_POST_FADER;
-					dsp.outputRouting[channel] = DSP_BUF_IDX_MAINLEFT;
-					*/
-
 					break;
 			}
 			break;
@@ -324,14 +356,22 @@ void commExecCommand(unsigned short classId, unsigned short channel, unsigned sh
 				return;
 			}
 
-			if (valueCount == 6) {
-				dsp.dspChannelCompressor[channel].value_thresholdDb = floatValues[0];
-				//dsp.dspChannelCompressor[channel].value_threshold = dbToLinear_fast(floatValues[0]) * FLOAT_NORM_TO_INT32;
-				dsp.dspChannelCompressor[channel].value_1_minus_1_by_ratio = floatValues[1]; // here the precalculated (1.0f - 1.0f/ratio) is sent by OMC
-				dsp.dspChannelCompressor[channel].value_makeup = floatValues[2];
-				dsp.dspChannelCompressor[channel].value_coeff_attack = floatValues[3];
-				dsp.dspChannelCompressor[channel].value_hold_ticks = floatValues[4];
-				dsp.dspChannelCompressor[channel].value_coeff_release = floatValues[5];
+			if (valueCount == 9) {
+				bool prevEnable = dsp.compressorEnable[channel];
+				bool newEnable  = (floatValues[8] != 0.0f);
+				dsp.dspChannelCompressor[channel].value_thresholdDb        = floatValues[0];
+				dsp.dspChannelCompressor[channel].value_1_minus_1_by_ratio = floatValues[1];
+				dsp.dspChannelCompressor[channel].value_makeup             = floatValues[2];
+				dsp.dspChannelCompressor[channel].value_coeff_attack       = floatValues[3];
+				dsp.dspChannelCompressor[channel].value_hold_ticks         = floatValues[4];
+				dsp.dspChannelCompressor[channel].value_coeff_release      = floatValues[5];
+				dsp.dspChannelCompressor[channel].value_kneeHalf           = floatValues[6];
+				dsp.dspChannelCompressor[channel].value_kneeCoeff          = floatValues[7];
+				dsp.compressorEnable[channel]                              = newEnable;
+				if (!prevEnable && newEnable) {
+					dsp.compressorState[channel].envelope = 1.0f;
+					dsp.compressorState[channel].holdTimer = 0;
+				}
 			}
 			break;
 		default:
