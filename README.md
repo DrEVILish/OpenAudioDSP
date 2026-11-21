@@ -12,6 +12,7 @@ Initially extracted from OpenX32 commit `fd94919c1b2fbed21c7ff8e51ca316abf37dcf5
   ADSP-21371s, including boot, PLL, SDRAM, SRU, SPORT, SPI/control protocol,
   interrupt handlers, and linker/startup files.
 - `targets/x32/dps1-ng`: the original experimental debugger project, unchanged.
+- [`targets/wing`](targets/wing/README.md): four WING Compact ADSP-21489 bring-up targets.
 - `tools/TrainNeuralNetwork`: DeFeedback training and offline processing tools.
 
 ## Build for X32/M32
