@@ -29,30 +29,8 @@ float linearToDb(float linear) {
 	return 20.0f * log10f(linear);
 }
 
-// fast approximation to 20.0f * log10(x)
-float linearToDb_fast(float linear) {
-    if (linear < 0.0000001f) return -140.0f; // Noise floor
-
-    // uses the bit-structure if floats for a fast log2-approximation
-    union { float f; uint32_t i; } vx = { linear };
-    float log2_approx = (float)vx.i * 1.1920928955078125e-7f - 126.94269504f;
-
-    // conversion of log2 to 20 * log10:
-    // 20 * log10(x) = 20 * log2(x) * log10(2) ~ 6.0206 * log2(x)
-    return 6.0206f * log2_approx;
-}
-
 float dbToLinear(float dB) {
     return powf(10.0f, dB * 0.05f);
-}
-
-float dbToLinear_fast(float dB) {
-    // 10^(dB/20) = 2^(dB / 6.0206)
-    float x = dB * (1.0f / 6.0206f); // log2-Skala
-    // Bit-Trick for 2^x Approximation
-    union { float f; int32_t i; } vx;
-    vx.i = (int32_t)(x * 8388608.0f) + 1065353216; // 2^23 * x + (127 << 23)
-    return vx.f;
 }
 
 float calcRMS(const float* __restrict src) {

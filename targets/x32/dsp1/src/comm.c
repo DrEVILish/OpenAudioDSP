@@ -330,7 +330,7 @@ void commExecCommand(unsigned short classId, unsigned short channel, unsigned sh
 				dsp.dspChannelCompressor[channel].value_thresholdDb = floatValues[0];
 				//dsp.dspChannelCompressor[channel].value_threshold = dbToLinear_fast(floatValues[0]) * FLOAT_NORM_TO_INT32;
 				dsp.dspChannelCompressor[channel].value_1_minus_1_by_ratio = floatValues[1]; // here the precalculated (1.0f - 1.0f/ratio) is sent by OMC
-				dsp.compressorMakeup[channel] = floatValues[2];
+				dsp.dspChannelCompressor[channel].value_makeup = floatValues[2];
 				dsp.dspChannelCompressor[channel].value_coeff_attack = floatValues[3];
 				dsp.dspChannelCompressor[channel].value_hold_ticks = floatValues[4];
 				dsp.dspChannelCompressor[channel].value_coeff_release = floatValues[5];
