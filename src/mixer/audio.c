@@ -391,7 +391,7 @@ void audioProcessData(void)
 	#pragma loop_count(MAX_CHAN_FULLFEATURED)
 	for (int i_ch = 0; i_ch < MAX_CHAN_FULLFEATURED; i_ch++)
 	{
-		if (!dsp.lowcutEnable)
+		if (!dsp.lowcutEnable[i_ch])
 		{
 			continue;
 		}
@@ -581,7 +581,7 @@ void audioProcessData(void)
 		float* src = &audioBuffer[TAP_POST_EQ][DSP_BUF_IDX_DSPCHANNEL + i_ch][0];
 		float* dst = &audioBuffer[TAP_PRE_FADER][DSP_BUF_IDX_DSPCHANNEL + i_ch][0];
 
-		if (dsp.compressorEnable)
+		if (dsp.compressorEnable[i_ch])
 		{
 			float makeUp = dsp.compressorMakeup[i_ch];
 			float coeff = 0.0f;
