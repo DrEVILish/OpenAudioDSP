@@ -712,19 +712,8 @@ void audioProcessData(void)
 	START_CYCLE_COUNT(cycletemp_mb);
 	#endif
 
-	#pragma loop_count(48) // MAX_CHAN_FPGA + MAX_DSP2_FXRETURN
-	for (int i_ch = 0; i_ch < (MAX_CHAN_FPGA + MAX_DSP2_FXRETURN); i_ch++)
-	{
-		float* restrict src = &audioBuffer[TAP_PRE_FADER][DSP_BUF_IDX_DSPCHANNEL + i_ch][0];
-		#pragma no_alias
-		#pragma vector_for
-		#pragma loop_count(SAMPLES_IN_BUFFER)
-		for (int s = 0; s < SAMPLES_IN_BUFFER; s++)
-		{
-			src[s] = 0;
-		}
-	}
-
+	// clear the mixbus accumulators
+	memset(&audioBuffer[TAP_INPUT][DSP_BUF_IDX_MIXBUS][0], 0, ACTIVE_MIX_BUSSES * SAMPLES_IN_BUFFER * sizeof(float));
 
 
 	#pragma loop_count(48) // MAX_CHAN_FPGA + MAX_DSP2_FXRETURN
