@@ -25,6 +25,26 @@
 #include "audio.h"
 #include "audio_io.h"
 #include "fx.h"
+#include "openaudiodsp/compressor.h"
+#include "openaudiodsp/eq.h"
+#include "openaudiodsp/fader.h"
+#include "openaudiodsp/gate.h"
+
+#if SAMPLES_IN_BUFFER != OPENAUDIODSP_COMPRESSOR_BLOCK_SAMPLES
+#error "The compressor batch must use the target's audio block size"
+#endif
+
+#if SAMPLES_IN_BUFFER != OPENAUDIODSP_EQ_BLOCK_SAMPLES
+#error "The EQ batch must use the target's audio block size"
+#endif
+
+#if SAMPLES_IN_BUFFER != OPENAUDIODSP_FADER_BLOCK_SAMPLES
+#error "The fader batch must use the target's audio block size"
+#endif
+
+#if SAMPLES_IN_BUFFER != OPENAUDIODSP_GATE_BLOCK_SAMPLES
+#error "The gate batch must use the target's audio block size"
+#endif
 
 #if DEBUG_COUNT_CYCLES_DETAIL
 #include <cycle_count.h>
@@ -78,6 +98,15 @@ int delayLineTailOffsetOutput[MAX_CHAN_FPGA]; // offset = (delayMs * sampleRate 
 #pragma align 8
 float delayReadBuffer[MAX_CHAN_FPGA][SAMPLES_IN_BUFFER];
 
+// SHARC SIMD accesses to SDRAM transfer only the PEx word. Keep every copy scalar.
+#pragma inline
+static void sdramCopy(float* restrict dst, const float* restrict src, int count)
+{
+	#pragma no_vectorization
+	for (int i = 0; i < count; ++i) {
+		dst[i] = src[i];
+	}
+}
 
 #pragma align 8 // align for 2 floats
 float audioBuffer[5][1 + MAX_CHAN_FPGA + MAX_DSP2_FXRETURN + MAX_MIXBUS + MAX_DSP2_FXINSERT + MAX_MATRIX + MAX_MAIN + MAX_DSP2_AUX + MAX_MONITOR][SAMPLES_IN_BUFFER]; // audioBuffer[TAPPOINT][CHANNEL][SAMPLE]
@@ -120,10 +149,8 @@ void audioSmoothVolume(void) {
 	vecsmltf(&audioTempBufferChanA[0], audioVolumeSmootherCoeff, &audioTempBufferChanA[0], MAX_CHAN_FPGA + MAX_DSP2_FXRETURN + ACTIVE_MIX_BUSSES); // temp = temp * coeff
 	vecvaddf(&dsp.channelVolume[0], &audioTempBufferChanA[0], &dsp.channelVolume[0], MAX_CHAN_FPGA + MAX_DSP2_FXRETURN + ACTIVE_MIX_BUSSES); // volume = volume + temp
 	*/
-	#pragma loop_count(64)
-	for (int i = 0; i < (MAX_CHAN_FPGA + MAX_DSP2_FXRETURN + ACTIVE_MIX_BUSSES); i++) {
-		dsp.channelVolume[i] = dsp.channelVolume[i] + ((dsp.channelVolumeSet[i] - dsp.channelVolume[i]) * audioVolumeSmootherCoeff);
-	}
+	faderSmoothGains(dsp.channelVolume, dsp.channelVolumeSet,
+		MAX_CHAN_FPGA + MAX_DSP2_FXRETURN + ACTIVE_MIX_BUSSES, audioVolumeSmootherCoeff);
 
 	// smooth audio-volume for mains
 	/*
@@ -132,10 +159,7 @@ void audioSmoothVolume(void) {
 	vecvaddf(&dsp.mainVolume[0], &audioTempBufferChanA[0], &dsp.mainVolume[0], 3); // volume = volume + temp
 	*/
 
-	#pragma loop_count(3)
-	for (int i = 0; i < 3; i++) {
-		dsp.mainVolume[i] = dsp.mainVolume[i] + ((dsp.mainVolumeSet[i] - dsp.mainVolume[i]) * audioVolumeSmootherCoeff);
-	}
+	faderSmoothGains(dsp.mainVolume, dsp.mainVolumeSet, MAX_MAIN, audioVolumeSmootherCoeff);
 }
 
 #pragma optimize_for_speed
@@ -336,12 +360,10 @@ void audioProcessData(void)
 		float* dst = &delayLineInput[i_ch][delayLineHeadInput];
 
 		if (wrapPoint >= SAMPLES_IN_BUFFER) {
-			// no warp-around -> use memcpy with burst-mode
-			memcpy(dst, src, SAMPLES_IN_BUFFER * sizeof(float));
+			sdramCopy(dst, src, SAMPLES_IN_BUFFER);
 		} else {
-			// warp-around: use two burst-writes
-			memcpy(dst,                      src,            wrapPoint                       * sizeof(float));
-			memcpy(&delayLineInput[i_ch][0], src + wrapPoint,(SAMPLES_IN_BUFFER - wrapPoint) * sizeof(float));
+			sdramCopy(dst, src, wrapPoint);
+			sdramCopy(&delayLineInput[i_ch][0], src + wrapPoint, SAMPLES_IN_BUFFER - wrapPoint);
 		}
 	}
 	// update head only once
@@ -362,12 +384,10 @@ void audioProcessData(void)
 		int readWrap = SAMPLES_IN_DELAYLINE - tail;
 
 		if (readWrap >= SAMPLES_IN_BUFFER) {
-			// no warp-around -> use memcpy with burst-mode
-			memcpy(dst, &delayLineInput[i_ch][tail], SAMPLES_IN_BUFFER * sizeof(float));
+			sdramCopy(dst, &delayLineInput[i_ch][tail], SAMPLES_IN_BUFFER);
 		} else {
-			// warp-around: use two burst-reads
-			memcpy(dst,            &delayLineInput[i_ch][tail], readWrap                        * sizeof(float));
-			memcpy(dst + readWrap, &delayLineInput[i_ch][0],   (SAMPLES_IN_BUFFER - readWrap)  * sizeof(float));
+			sdramCopy(dst, &delayLineInput[i_ch][tail], readWrap);
+			sdramCopy(dst + readWrap, &delayLineInput[i_ch][0], SAMPLES_IN_BUFFER - readWrap);
 		}
 	}
 #if DEBUG_COUNT_CYCLES_DETAIL
@@ -460,71 +480,8 @@ void audioProcessData(void)
 	//				 | |\  | (_) | \__ \  __/ (_| | (_| | ||  __/
 	//				 |_| \_|\___/|_|___/\___|\__, |\__,_|\__\___|
 	//				                         |___/
-	#pragma loop_count(MAX_CHAN_FULLFEATURED, MAX_CHAN_FULLFEATURED, MAX_CHAN_FULLFEATURED)
-	for (int i_ch = 0; i_ch < MAX_CHAN_FULLFEATURED; i_ch++)
-	{
-		if (!dsp.dspChannelGate[i_ch].value_enable)
-		{
-			continue;
-		}
-
-		// 1. Pointer-Aliasing aufl�sen
-		float* restrict src_dst = &audioBuffer[TAP_PRE_EQ][DSP_BUF_IDX_DSPCHANNEL + i_ch][0];
-
-		// 2. Struct-Zugriffe aus der Schleife ziehen (State Caching)
-		float env = dsp.gateEnvelope[i_ch]; // Zustand nur EINMAL aus RAM lesen
-		int holdTimer = dsp.dspChannelGate[i_ch].holdTimer;
-		float threshold = dsp.dspChannelGate[i_ch].value_threshold;
-		float refValue = 0.0f;
-
-		// calculate RMS over all 16 samples
-		#pragma no_alias
-		#pragma vector_for
-		#pragma loop_count(SAMPLES_IN_BUFFER, SAMPLES_IN_BUFFER, SAMPLES_IN_BUFFER)
-		#pragma align 8
-		for (int s = 0; s < SAMPLES_IN_BUFFER; s++) {
-			refValue += src_dst[s] * src_dst[s];
-		}
-		refValue = sqrtf(refValue * 0.0625f);
-
-		// calculation of the envelope
-		float targetGainLinear = (refValue < threshold) ? 0.0f : 1.0f;
-		float coeff = 0.0f;
-
-		// Attack / Hold / Release Logic
-		if (targetGainLinear > env) {
-			// Attack
-			coeff = dsp.dspChannelGate[i_ch].value_coeff_attack;
-			holdTimer = dsp.dspChannelGate[i_ch].value_hold_ticks;
-		} else {
-			// Hold -> Release
-			if (holdTimer > 0) {
-				holdTimer--;
-			} else {
-				// Release
-				coeff = dsp.dspChannelGate[i_ch].value_coeff_release;
-			}
-		}
-
-		// Timer-Zustand wieder zur�ckschreiben
-		dsp.dspChannelGate[i_ch].holdTimer = holdTimer;
-
-		// 3. IIR-Filter Mathe-Trick (Vorbereitung f�r die Audioschleife)
-		float a1 = 1.0f - coeff;
-		float b0 = coeff * targetGainLinear;
-
-		// apply calculated gain to samples
-		#pragma no_alias
-		#pragma loop_count(SAMPLES_IN_BUFFER, SAMPLES_IN_BUFFER, SAMPLES_IN_BUFFER)
-		for (int s = 0; s < SAMPLES_IN_BUFFER; s++) {
-			// Ein einziger MAC-Befehl (Multiply-Accumulate)!
-			env = (env * a1) + b0;
-			src_dst[s] *= env;
-		}
-
-		// Envelope-Zustand EINMAL nach der Schleife speichern
-		dsp.gateEnvelope[i_ch] = env;
-	}
+	gateProcessBatch(&audioBuffer[TAP_PRE_EQ][DSP_BUF_IDX_DSPCHANNEL],
+		dsp.dspChannelGate, dsp.gateState, MAX_CHAN_FULLFEATURED);
 #if DEBUG_COUNT_CYCLES_DETAIL
 	STOP_CYCLE_COUNT(cyclemap[4], cycletemp);
 #endif
@@ -546,19 +503,9 @@ void audioProcessData(void)
 	// copy PRE_EQ-Tap to POST_EQ-TAP
 	memcpy(&audioBuffer[TAP_POST_EQ][DSP_BUF_IDX_DSPCHANNEL][0], &audioBuffer[TAP_PRE_EQ][DSP_BUF_IDX_DSPCHANNEL][0], (CHANNELS_WITH_4BD_EQ - MAX_MAIN) * SAMPLES_IN_BUFFER * sizeof(float));
 
-	#pragma loop_count(48) // CHANNELS_WITH_4BD_EQ - MAX_MAIN
-	for (int i_ch = 0; i_ch < (CHANNELS_WITH_4BD_EQ - MAX_MAIN); i_ch++)
-	{
-		if (dsp.eqActive[i_ch])
-		{
-			// apply biquad EQ on POST_EQ-Tap directly
-			biquad_trans(&audioBuffer[TAP_POST_EQ][DSP_BUF_IDX_DSPCHANNEL + i_ch][0],
-						 &dsp.peqCoeffs_4BD_EQ[i_ch][0],
-						 &dsp.peqStates_4BD_EQ[i_ch][0],
-						 SAMPLES_IN_BUFFER,
-						 EQ_4BD_BANDS);
-		}
-	}
+	eqProcessBatch(&audioBuffer[TAP_POST_EQ][DSP_BUF_IDX_DSPCHANNEL], dsp.eqActive,
+		&dsp.peqCoeffs_4BD_EQ[0][0], &dsp.peqStates_4BD_EQ[0][0],
+		CHANNELS_WITH_4BD_EQ - MAX_MAIN, EQ_4BD_BANDS);
 #if DEBUG_COUNT_CYCLES_DETAIL
 	STOP_CYCLE_COUNT(cyclemap[5], cycletemp);
 #endif
@@ -575,72 +522,10 @@ void audioProcessData(void)
 	//				 | |_| | |_| | | | | (_| | | | | | | | (__\__ \
 	//				 |____/ \__, |_| |_|\__,_|_| |_| |_|_|\___|___/
 	//				        |___/
-	#pragma loop_count(MAX_CHAN_FULLFEATURED)
-	for (int i_ch = 0; i_ch < MAX_CHAN_FULLFEATURED; i_ch++)
-	{
-		float* src = &audioBuffer[TAP_POST_EQ][DSP_BUF_IDX_DSPCHANNEL + i_ch][0];
-		float* dst = &audioBuffer[TAP_PRE_FADER][DSP_BUF_IDX_DSPCHANNEL + i_ch][0];
-
-		if (dsp.compressorEnable[i_ch])
-		{
-			float makeUp = dsp.compressorMakeup[i_ch];
-			float coeff = 0.0f;
-			float refValue = 0.0f;
-
-
-			// calculate RMS over all 16 samples
-			#pragma loop_count(SAMPLES_IN_BUFFER, SAMPLES_IN_BUFFER, SAMPLES_IN_BUFFER)
-			#pragma vector_for
-			for (int s = 0; s < SAMPLES_IN_BUFFER; s++) {
-				refValue += src[s] * src[s];
-			}
-			refValue = sqrtf(refValue * 0.0625f); // divide by 16 samples
-
-			// calculation of the envelope
-			refValue = linearToDb_fast(refValue * INT32_TO_FLOAT_NORM);
-			float targetGainDb = 0.0f;
-			if (refValue > dsp.dspChannelCompressor[i_ch].value_thresholdDb) {
-				targetGainDb = (dsp.dspChannelCompressor[i_ch].value_thresholdDb - refValue) * dsp.dspChannelCompressor[i_ch].value_1_minus_1_by_ratio;
-			}
-
-			// Attack / Hold / Release Logic
-			float targetGainLinear = dbToLinear_fast(targetGainDb);
-
-			// calculation of the envelope
-			if (targetGainLinear < dsp.compressorEnvelope[i_ch]) {
-				// Attack
-				coeff = dsp.dspChannelCompressor[i_ch].value_coeff_attack;
-				dsp.dspChannelCompressor[i_ch].holdTimer = dsp.dspChannelCompressor[i_ch].value_hold_ticks; // Reset Hold-Timer
-			} else {
-				// Hold -> Release
-				if (dsp.dspChannelCompressor[i_ch].holdTimer > 0) {
-					dsp.dspChannelCompressor[i_ch].holdTimer--;
-				}else{
-					coeff = dsp.dspChannelCompressor[i_ch].value_coeff_release;
-				}
-			}
-
-			// apply calculated gain to samples
-			#pragma loop_count(SAMPLES_IN_BUFFER)
-			for (int s = 0; s < SAMPLES_IN_BUFFER; s++) {
-				dsp.compressorEnvelope[i_ch] += coeff * (targetGainLinear - dsp.compressorEnvelope[i_ch]);
-
-				// use small low-pass-filter to smooth the envelope even more
-				//dsp.compressorGainSmoothed[i_ch] = dsp.compressorEnvelope[i_ch] + 0.990f * (dsp.compressorGainSmoothed[i_ch] - dsp.compressorEnvelope[i_ch]);
-				//dst[s] = src[s] * dsp.compressorGainSmoothed[i_ch] * makeUp;
-
-				// direct use of envelope
-				dst[s] = src[s] * dsp.compressorEnvelope[i_ch] * makeUp;
-			}
-		}
-		else // compressor disabled
-		{
-			for (int s = 0; s < SAMPLES_IN_BUFFER; s++)
-			{
-				dst[s] = src[s];
-			}
-		}
-	}
+	compressorProcessBatch(&audioBuffer[TAP_POST_EQ][DSP_BUF_IDX_DSPCHANNEL],
+		&audioBuffer[TAP_PRE_FADER][DSP_BUF_IDX_DSPCHANNEL],
+		dsp.dspChannelCompressor, dsp.compressorState, dsp.compressorEnable,
+		MAX_CHAN_FULLFEATURED, INT32_TO_FLOAT_NORM);
 
     // bypass: channels that don't have full-featured processing
     int bypassStart = DSP_BUF_IDX_DSPCHANNEL + MAX_CHAN_FULLFEATURED;
@@ -677,17 +562,9 @@ void audioProcessData(void)
 	START_CYCLE_COUNT(cycletemp);
 	#endif
 
-	#pragma loop_count(48) // MAX_CHAN_FPGA + MAX_DSP2_FXRETURN
-	for (int i_ch = 0; i_ch < (MAX_CHAN_FPGA + MAX_DSP2_FXRETURN); i_ch++) {
-		float* src = &audioBuffer[TAP_PRE_FADER][DSP_BUF_IDX_DSPCHANNEL + i_ch][0];
-		float* dst = &audioBuffer[TAP_POST_FADER][DSP_BUF_IDX_DSPCHANNEL + i_ch][0];
-
-		#pragma loop_count(SAMPLES_IN_BUFFER)
-		#pragma vector_for
-		for (int s = 0; s < SAMPLES_IN_BUFFER; s++) {
-			dst[s] = dsp.channelVolume[i_ch] * src[s];
-		}
-	}
+	faderProcessBatch(&audioBuffer[TAP_PRE_FADER][DSP_BUF_IDX_DSPCHANNEL],
+		&audioBuffer[TAP_POST_FADER][DSP_BUF_IDX_DSPCHANNEL],
+		dsp.channelVolume, MAX_CHAN_FPGA + MAX_DSP2_FXRETURN);
 	#if DEBUG_COUNT_CYCLES_DETAIL
 	STOP_CYCLE_COUNT(cyclemap[7], cycletemp);
 	#endif
@@ -764,19 +641,9 @@ void audioProcessData(void)
 	#endif
 	// volume-control of the mixbus-channels
 
-	#pragma loop_count(ACTIVE_MIX_BUSSES)
-	for (int i_ch = 0; i_ch < ACTIVE_MIX_BUSSES; i_ch++)
-	{
-		float* src = &audioBuffer[TAP_INPUT][DSP_BUF_IDX_MIXBUS + i_ch][0];
-		float* dst = &audioBuffer[TAP_POST_FADER][DSP_BUF_IDX_MIXBUS + i_ch][0];
-
-		#pragma loop_count(SAMPLES_IN_BUFFER)
-		#pragma vector_for
-		for (int s = 0; s < SAMPLES_IN_BUFFER; s++)
-		{
-			dst[s] = dsp.channelVolume[MAX_CHAN_FPGA + MAX_DSP2_FXRETURN + i_ch] * src[s];
-		}
-	}
+	faderProcessBatch(&audioBuffer[TAP_INPUT][DSP_BUF_IDX_MIXBUS],
+		&audioBuffer[TAP_POST_FADER][DSP_BUF_IDX_MIXBUS],
+		&dsp.channelVolume[MAX_CHAN_FPGA + MAX_DSP2_FXRETURN], ACTIVE_MIX_BUSSES);
 
 	#if DEBUG_COUNT_CYCLES_DETAIL
 	STOP_CYCLE_COUNT(cyclemap[20], cycletemp_mb);
@@ -842,14 +709,9 @@ void audioProcessData(void)
 	// copy INPUT-Tap to POST_EQ-TAP
 	memcpy(&audioBuffer[TAP_POST_EQ][DSP_BUF_IDX_MAINLEFT][0], &audioBuffer[TAP_INPUT][DSP_BUF_IDX_MAINLEFT][0], MAX_MAIN * SAMPLES_IN_BUFFER * sizeof(float));
 
-	for (int i_ch = 0; i_ch < MAX_MAIN; i_ch++) {
-		// apply biquad EQ on POST_EQ-Tap directly
-		biquad_trans(&audioBuffer[TAP_POST_EQ][DSP_BUF_IDX_MAINLEFT + i_ch][0],
-					 &dsp.peqCoeffs_6BD_EQ[MAX_MIXBUS + i_ch][0],
-					 &dsp.peqStates_6BD_EQ[MAX_MIXBUS + i_ch][0],
-					 SAMPLES_IN_BUFFER,
-					 EQ_6BD_BANDS);
-	}
+	eqProcessBatch(&audioBuffer[TAP_POST_EQ][DSP_BUF_IDX_MAINLEFT], NULL,
+		&dsp.peqCoeffs_6BD_EQ[MAX_MIXBUS][0],
+		&dsp.peqStates_6BD_EQ[MAX_MIXBUS][0], MAX_MAIN, EQ_6BD_BANDS);
 	STOP_CYCLE_COUNT(cyclemap[10], cycletemp);
 
 	// TODO: process dynamics on main L/R/S
@@ -858,36 +720,18 @@ void audioProcessData(void)
 #if DEBUG_COUNT_CYCLES_DETAIL
 	START_CYCLE_COUNT(cycletemp);
 #endif
-	#pragma loop_count(3)
-	for (int i_ch = 0; i_ch < 3; i_ch++) {
-		float* src = &audioBuffer[TAP_POST_EQ][DSP_BUF_IDX_MAINLEFT + i_ch][0];
-		float gain = dsp.mainVolume[i_ch];
-		float* dst = &audioBuffer[TAP_POST_FADER][DSP_BUF_IDX_MAINLEFT + i_ch][0];
-
-		#pragma loop_count(SAMPLES_IN_BUFFER)
-		#pragma vector_for
-		for (int s = 0; s < SAMPLES_IN_BUFFER; s++) {
-			dst[s] = gain * src[s];
-		}
-	}
+	faderProcessBatch(&audioBuffer[TAP_POST_EQ][DSP_BUF_IDX_MAINLEFT],
+		&audioBuffer[TAP_POST_FADER][DSP_BUF_IDX_MAINLEFT],
+		dsp.mainVolume, MAX_MAIN);
 	STOP_CYCLE_COUNT(cyclemap[11], cycletemp);
 	#else
 	// main-volume
 #if DEBUG_COUNT_CYCLES_DETAIL
 	START_CYCLE_COUNT(cycletemp);
 #endif
-	#pragma loop_count(3)
-	for (int i_ch = 0; i_ch < 3; i_ch++) {
-		float* src = &audioBuffer[TAP_INPUT][DSP_BUF_IDX_MAINLEFT + i_ch][0];
-		float gain = dsp.mainVolume[i_ch];
-		float* dst = &audioBuffer[TAP_POST_FADER][DSP_BUF_IDX_MAINLEFT + i_ch][0];
-
-		#pragma loop_count(SAMPLES_IN_BUFFER)
-		#pragma vector_for
-		for (int s = 0; s < SAMPLES_IN_BUFFER; s++) {
-			dst[s] = gain * src[s];
-		}
-	}
+	faderProcessBatch(&audioBuffer[TAP_INPUT][DSP_BUF_IDX_MAINLEFT],
+		&audioBuffer[TAP_POST_FADER][DSP_BUF_IDX_MAINLEFT],
+		dsp.mainVolume, MAX_MAIN);
 #if DEBUG_COUNT_CYCLES_DETAIL
 	STOP_CYCLE_COUNT(cyclemap[11], cycletemp);
 #endif
@@ -1059,12 +903,10 @@ void audioProcessData(void)
 		float* restrict dst = &delayLineOutput[i_ch][delayLineHeadOutput];
 
 		if (wrapPoint >= SAMPLES_IN_BUFFER) {
-			// no warp-around -> use memcpy with burst-mode
-			memcpy(dst, src, SAMPLES_IN_BUFFER * sizeof(float));
+			sdramCopy(dst, src, SAMPLES_IN_BUFFER);
 		} else {
-			// warp-around: use two burst-writes
-			memcpy(dst,                       src,             wrapPoint                       * sizeof(float));
-			memcpy(&delayLineOutput[i_ch][0], src + wrapPoint, (SAMPLES_IN_BUFFER - wrapPoint) * sizeof(float));
+			sdramCopy(dst, src, wrapPoint);
+			sdramCopy(&delayLineOutput[i_ch][0], src + wrapPoint, SAMPLES_IN_BUFFER - wrapPoint);
 		}
 	}
 	// update head only once
@@ -1081,12 +923,10 @@ void audioProcessData(void)
 		int readWrap = SAMPLES_IN_DELAYLINE - tail;
 
 		if (readWrap >= SAMPLES_IN_BUFFER) {
-			// no warp-around -> use memcpy with burst-mode
-			memcpy(dst, src_base, SAMPLES_IN_BUFFER * sizeof(float));
+			sdramCopy(dst, src_base, SAMPLES_IN_BUFFER);
 		} else {
-			// wrap-around: use two burst-reads
-			memcpy(dst,            src_base, readWrap                        * sizeof(float));
-			memcpy(dst + readWrap, &delayLineOutput[i_ch][0],   (SAMPLES_IN_BUFFER - readWrap)  * sizeof(float));
+			sdramCopy(dst, src_base, readWrap);
+			sdramCopy(dst + readWrap, &delayLineOutput[i_ch][0], SAMPLES_IN_BUFFER - readWrap);
 		}
 	}
 

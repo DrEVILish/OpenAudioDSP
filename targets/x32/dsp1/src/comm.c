@@ -287,25 +287,23 @@ void commExecCommand(unsigned short classId, unsigned short channel, unsigned sh
 					}
 					break;
 				case 'r': // reset channel-parameters
-					// init single-pole lowcut
-					dsp.lowcutCoeff[channel] = 0.993497573586; // 50Hz: equation = 1.0f / (1.0f + 2.0f * M_PI * desiredLowCutFrequency * (1.0f/samplerate));
-					dsp.lowcutStatesInput[channel] = 0.0; // reset integrator
-					dsp.lowcutStatesOutput[channel] = 0.0; // reset integrator
+					if (channel < MAX_CHAN_FULLFEATURED) {
+						// init single-pole lowcut (50 Hz) and clear its state
+						dsp.lowcutCoeff[channel] = 0.993497573586;
+						dsp.lowcutStatesInput[channel] = 0.0;
+						dsp.lowcutStatesOutput[channel] = 0.0;
+					}
+					if (channel >= CHANNELS_WITH_4BD_EQ) {
+						return;
+					}
 
 					// initialize PEQs
 					float coeffs[5] = {1, 0, 0, 0, 0}; // a0, a1, a2, b1, b2: direct passthrough
 					for (int i_peq = 0; i_peq < EQ_4BD_BANDS; i_peq++) {
 						fxSetPeqCoeffs(channel, i_peq, &coeffs[0]);
 					}
-					// init PEQ-states
-					for (int s = 0; s < (2 * EQ_4BD_BANDS); s++) {
-						dsp.peqStates_4BD_EQ[channel][s] = 0;
-						dsp.peqStates_4BD_EQ[channel][s] = 0;
-					}
 
 					// reset biquad-integrators
-					dsp.lowcutStatesInput[channel] = 0;
-					dsp.lowcutStatesOutput[channel] = 0;
 					memset(&dsp.peqStates_4BD_EQ[channel][0], 0, 2 * EQ_4BD_BANDS * sizeof(float));
 
 					/*
@@ -330,7 +328,7 @@ void commExecCommand(unsigned short classId, unsigned short channel, unsigned sh
 				dsp.dspChannelCompressor[channel].value_thresholdDb = floatValues[0];
 				//dsp.dspChannelCompressor[channel].value_threshold = dbToLinear_fast(floatValues[0]) * FLOAT_NORM_TO_INT32;
 				dsp.dspChannelCompressor[channel].value_1_minus_1_by_ratio = floatValues[1]; // here the precalculated (1.0f - 1.0f/ratio) is sent by OMC
-				dsp.compressorMakeup[channel] = floatValues[2];
+				dsp.dspChannelCompressor[channel].value_makeup = floatValues[2];
 				dsp.dspChannelCompressor[channel].value_coeff_attack = floatValues[3];
 				dsp.dspChannelCompressor[channel].value_hold_ticks = floatValues[4];
 				dsp.dspChannelCompressor[channel].value_coeff_release = floatValues[5];

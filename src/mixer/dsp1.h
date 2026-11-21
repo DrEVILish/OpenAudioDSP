@@ -7,6 +7,8 @@
 
 #include "version.h"
 #include "defines.h"
+#include "openaudiodsp/compressor.h"
+#include "openaudiodsp/gate.h"
 
 // general includes
 #include <stdio.h>     				// Get declaration of puts and definition of NULL
@@ -32,32 +34,6 @@
 // global variables
 extern volatile uint32_t cyclemap[CYCLEMAP_SIZE];
 
-typedef struct {
-	// filter-data from i.MX25
-	bool value_enable;
-	float value_threshold; // linear
-	float value_gainmin; // linear
-	float value_coeff_attack;
-	float value_hold_ticks; // number of sample-ticks
-	float value_coeff_release;
-
-	// online parameters
-	int holdTimer;
-} sGate;
-
-typedef struct {
-	// filter-data from i.MX25
-	float value_thresholdDb; // indB
-	//float value_threshold; // linear
-	float value_1_minus_1_by_ratio; // here the precalculated (1.0f - 1.0f/ratio) is sent by OMC
-	float value_coeff_attack;
-	float value_hold_ticks; // number of sample-ticks
-	float value_coeff_release;
-
-	// online parameters
-	int holdTimer;
-} sCompressor;
-
 struct
 {
 	float lowcutEnable[MAX_CHAN_FULLFEATURED];
@@ -70,12 +46,10 @@ struct
 	float highcutStates[MAX_CHAN_FULLFEATURED];
 	#endif
 
-	float gateEnvelope[MAX_CHAN_FULLFEATURED];
+	sGateState gateState[MAX_CHAN_FULLFEATURED];
 
 	bool compressorEnable[MAX_CHAN_FULLFEATURED];
-	float compressorEnvelope[MAX_CHAN_FULLFEATURED];
-	float compressorMakeup[MAX_CHAN_FULLFEATURED];
-	//float compressorGainSmoothed[MAX_CHAN_FULLFEATURED];
+	sCompressorState compressorState[MAX_CHAN_FULLFEATURED];
 
 	bool eqActive[CHANNELS_WITH_4BD_EQ];
 

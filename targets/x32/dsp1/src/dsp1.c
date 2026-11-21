@@ -65,11 +65,11 @@ void openx32Init(void)
 
 		dsp.lowcutEnable[ch] = false;
 		dsp.dspChannelGate[ch].value_enable = false;
-		dsp.gateEnvelope[ch] = 1.0f;
+		dsp.gateState[ch].envelope = 1.0f;
 
 		dsp.compressorEnable[ch] = false;
-		dsp.compressorEnvelope[ch] = 1.0f;
-		dsp.dspChannelCompressor[ch].holdTimer = 0;
+		dsp.compressorState[ch].envelope = 1.0f;
+		dsp.compressorState[ch].holdTimer = 0;
 	}
 
 	for(int ch = 0; ch < CHANNELS_WITH_4BD_EQ; ch++)
