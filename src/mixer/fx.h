@@ -5,9 +5,7 @@
 
 // function prototypes
 float linearToDb(float linear);
-float linearToDb_fast(float linear);
 float dbToLinear(float dB);
-float dbToLinear_fast(float dB);
 float calcRMS(const float* __restrict src);
 void fxSetPeqCoeffs(int channel, int index, float coeffs[]);
 void fxSmoothCoeffs(void);
