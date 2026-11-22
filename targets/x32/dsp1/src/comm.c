@@ -255,12 +255,13 @@ void commExecCommand(unsigned short classId, unsigned short channel, unsigned sh
 				return;
 			}
 
-			if (valueCount == 5) {
+			if (valueCount == 6) {
 				dsp.dspChannelGate[channel].value_threshold = floatValues[0];
 				dsp.dspChannelGate[channel].value_gainmin = floatValues[1];
 				dsp.dspChannelGate[channel].value_coeff_attack = floatValues[2];
 				dsp.dspChannelGate[channel].value_hold_ticks = floatValues[3];
 				dsp.dspChannelGate[channel].value_coeff_release = floatValues[4];
+				dsp.dspChannelGate[channel].value_enable = (floatValues[5] == 1.0f);
 			}
 			break;
 		case 'e': // Equalizer/Filter
