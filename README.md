@@ -4,7 +4,7 @@ Shared SHARC audio processing for OpenMixerProject
 
 ## Bugs and Ideas
 
-Please report Bugs or submit Ideas in our zentral [Ticketsystem](https://github.com/OpenMixerProject/Ticketsystem/issues)
+Please report Bugs or submit Ideas in our central [Ticketsystem](https://github.com/OpenMixerProject/Ticketsystem/issues)
 
 ## Layout
 - `src/mixer`: channel processing, monitoring and delay processing (originally DSP1)
