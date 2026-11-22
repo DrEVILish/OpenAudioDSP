@@ -270,9 +270,10 @@ void commExecCommand(unsigned short classId, unsigned short channel, unsigned sh
 						return;
 					}
 
-					if (valueCount == 1) {
+					if (valueCount == 2) {
 						// copy coefficient
 						dsp.lowcutCoeff[channel] = floatValues[0]; // equation = 1.0f / (1.0f + 2.0f * M_PI * desiredLowCutFrequency * (1.0f/samplerate));
+						dsp.lowcutEnable[channel] = (floatValues[1] == 1.0f);
 					}
 					break;
 				case 'e': // EQ
